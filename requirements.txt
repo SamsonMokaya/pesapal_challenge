@@ -1,0 +1,3 @@
+# RDBMS Challenge Dependencies
+# No external dependencies required for Phase 1
+# FastAPI and Jinja2 will be added in Phase 7 for web app
