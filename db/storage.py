@@ -4,7 +4,6 @@ Handles reading and writing table data, metadata, and indexes.
 """
 
 import json
-import os
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 

@@ -6,6 +6,13 @@ from typing import Optional, Dict, Any
 from .engine import DatabaseEngine
 from .parser import SQLParser
 
+# Try to import readline for better input handling (arrow keys, history)
+try:
+    import readline
+    READLINE_AVAILABLE = True
+except ImportError:
+    READLINE_AVAILABLE = False
+
 
 class REPL:
     """Interactive REPL for executing SQL-like commands."""
@@ -20,6 +27,23 @@ class REPL:
         self.engine = engine or DatabaseEngine()
         self.parser = SQLParser()
         self.prompt = "mydb> "
+        self.history_file = None
+        
+        # Set up readline for better input handling
+        if READLINE_AVAILABLE:
+            # Configure readline
+            readline.set_completer_delims(' \t\n;')
+            readline.parse_and_bind("tab: complete")
+            
+            # Try to load history from file
+            try:
+                import os
+                history_path = os.path.expanduser("~/.mydb_history")
+                if os.path.exists(history_path):
+                    readline.read_history_file(history_path)
+                self.history_file = history_path
+            except Exception:
+                pass  # History file not critical
     
     def run(self) -> None:
         """Start the interactive REPL loop."""
@@ -29,6 +53,7 @@ class REPL:
         
         while True:
             try:
+                # Use input() - readline will handle arrow keys automatically if available
                 command = input(self.prompt).strip()
                 
                 if not command:
@@ -36,6 +61,12 @@ class REPL:
                 
                 # Handle exit commands
                 if command.lower() in ('exit', 'quit', 'q'):
+                    # Save history before exiting
+                    if READLINE_AVAILABLE and self.history_file:
+                        try:
+                            readline.write_history_file(self.history_file)
+                        except Exception:
+                            pass
                     print("Goodbye!")
                     break
                 
@@ -90,9 +121,25 @@ class REPL:
             rows = self.engine.select(
                 parsed["table_name"],
                 parsed["columns"],
-                parsed["where_clause"]
+                parsed["where_clause"],
+                parsed.get("joins")
             )
             return {"status": "OK", "data": rows}
+        
+        elif cmd_type == "UPDATE":
+            rows_affected = self.engine.update(
+                parsed["table_name"],
+                parsed["assignments"],
+                parsed["where_clause"]
+            )
+            return {"status": "OK", "message": f"{rows_affected} row(s) updated"}
+        
+        elif cmd_type == "DELETE":
+            rows_deleted = self.engine.delete(
+                parsed["table_name"],
+                parsed["where_clause"]
+            )
+            return {"status": "OK", "message": f"{rows_deleted} row(s) deleted"}
         
         else:
             raise ValueError(f"Unsupported command type: {cmd_type}")
@@ -120,6 +167,8 @@ Available commands:
   INSERT INTO table_name VALUES (value1, value2, ...)
   SELECT * FROM table_name [WHERE column=value]
   SELECT col1, col2 FROM table_name [WHERE column=value]
+  UPDATE table_name SET column=value [, column=value ...] [WHERE column=value]
+  DELETE FROM table_name [WHERE column=value]
   list tables  (or \\dt) - List all tables
   help         - Show this help message
   exit/quit    - Exit the REPL
