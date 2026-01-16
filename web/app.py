@@ -161,7 +161,7 @@ async def get_product(product_id: int = Path(..., description="Product ID")):
 async def create_product(product: ProductCreate):
     """Create a new product."""
     try:
-        engine.insert("products", [None, product.name, product.price, product.description, product.in_stock])
+        engine.insert("products", [None, product.name, product.price, product.in_stock, product.description])
         
         # Get the created product (find by name since it should be unique enough)
         rows = engine.select("products", columns=None, where_clause={"name": product.name})
@@ -251,7 +251,7 @@ async def get_order(order_id: int = Path(..., description="Order ID")):
 async def create_order(order: OrderCreate):
     """Create a new order."""
     try:
-        engine.insert("orders", [None, order.user_id, order.total, order.status, order.created_at])
+        engine.insert("orders", [None, order.user_id, order.total, order.status])
         
         # Get all orders and find the one matching our criteria (should be the newest)
         all_orders = engine.select("orders", columns=None, where_clause=None)

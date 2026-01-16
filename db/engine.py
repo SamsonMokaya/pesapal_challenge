@@ -384,32 +384,43 @@ class DatabaseEngine:
                         if col not in schema["columns"]:
                             raise ValueError(f"Column '{col}' not found in table '{table_name}'")
                         
-                        # Convert expected_value to proper type for comparison
                         col_type = schema["columns"][col]["type"]
-                        try:
-                            if expected_value is None or (isinstance(expected_value, str) and expected_value.upper() == 'NULL'):
-                                if row[col] is not None:
-                                    match = False
-                                    break
-                            else:
-                                converted_value = self._validate_value_type(expected_value, col_type)
-                                # Case-insensitive comparison for TEXT columns
-                                if col_type == "TEXT":
-                                    if isinstance(row[col], str) and isinstance(converted_value, str):
-                                        if row[col].lower() != converted_value.lower():
-                                            match = False
-                                            break
-                                    elif row[col] != converted_value:
+                        
+                        # Check if this is a LIKE operator
+                        if isinstance(expected_value, dict) and expected_value.get("operator") == "LIKE":
+                            pattern = expected_value.get("value")
+                            if not isinstance(pattern, str):
+                                match = False
+                                break
+                            if not self._match_like_pattern(row[col], pattern):
+                                match = False
+                                break
+                        else:
+                            # Regular equality comparison
+                            try:
+                                if expected_value is None or (isinstance(expected_value, str) and expected_value.upper() == 'NULL'):
+                                    if row[col] is not None:
                                         match = False
                                         break
                                 else:
-                                    if row[col] != converted_value:
-                                        match = False
-                                        break
-                        except ValueError:
-                            # Type conversion failed, no match
-                            match = False
-                            break
+                                    converted_value = self._validate_value_type(expected_value, col_type)
+                                    # Case-insensitive comparison for TEXT columns
+                                    if col_type == "TEXT":
+                                        if isinstance(row[col], str) and isinstance(converted_value, str):
+                                            if row[col].lower() != converted_value.lower():
+                                                match = False
+                                                break
+                                        elif row[col] != converted_value:
+                                            match = False
+                                            break
+                                    else:
+                                        if row[col] != converted_value:
+                                            match = False
+                                            break
+                            except ValueError:
+                                # Type conversion failed, no match
+                                match = False
+                                break
                     
                     if match:
                         filtered_rows.append(row)
@@ -1082,6 +1093,39 @@ class DatabaseEngine:
                 self._handle_foreign_key_constraints(child_table_name, 
                     [row for row in all_child_rows if row.get(child_pk) in deleted_child_pk_values],
                     child_schema)
+    
+    @staticmethod
+    def _match_like_pattern(text: str, pattern: str) -> bool:
+        """
+        Match text against a LIKE pattern with % and _ wildcards.
+        
+        Args:
+            text: Text to match
+            pattern: LIKE pattern with % (any sequence) and _ (single character)
+            
+        Returns:
+            True if text matches pattern, False otherwise
+        """
+        if not isinstance(text, str):
+            return False
+        
+        # Convert SQL LIKE pattern to regex
+        regex_pattern = '^'
+        i = 0
+        while i < len(pattern):
+            if pattern[i] == '%':
+                regex_pattern += '.*'
+            elif pattern[i] == '_':
+                regex_pattern += '.'
+            else:
+                regex_pattern += re.escape(pattern[i])
+            i += 1
+        regex_pattern += '$'
+        
+        try:
+            return bool(re.match(regex_pattern, text, re.IGNORECASE))
+        except re.error:
+            return False
     
     def list_tables(self) -> List[str]:
         """
