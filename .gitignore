@@ -12,8 +12,10 @@ ENV/
 .venv
 
 # Database files (data directory)
-data/
-*.json
+# Ignore JSON files but keep the directory structure
+data/*.json
+!data/
+!data/.gitkeep
 
 # Test files
 test_*.py
