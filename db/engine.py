@@ -70,7 +70,8 @@ class DatabaseEngine:
             "unique_keys": [],
             "indexes": {},
             "auto_increment": None,  # Column name with auto_increment
-            "auto_increment_counter": 0  # Current counter value
+            "auto_increment_counter": 0,  # Current counter value
+            "foreign_keys": []  # List of foreign key definitions
         }
         
         column_names = set()
@@ -113,10 +114,26 @@ class DatabaseEngine:
                 if is_auto_increment:
                     schema["auto_increment"] = col_name
             
+            # Handle foreign key
+            foreign_key = col_def.get("foreign_key")
+            if foreign_key:
+                # Validate that referenced table exists (if it does)
+                ref_table = foreign_key.get("references_table")
+                ref_column = foreign_key.get("references_column")
+                on_delete = foreign_key.get("on_delete", "RESTRICT")  # Default to RESTRICT
+                if ref_table and ref_column:
+                    schema["foreign_keys"].append({
+                        "column": col_name,
+                        "references_table": ref_table,
+                        "references_column": ref_column,
+                        "on_delete": on_delete
+                    })
+            
             schema["columns"][col_name] = {
                 "type": col_type,
                 "nullable": nullable,
-                "unique": is_unique or is_primary
+                "unique": is_unique or is_primary,
+                "foreign_key": foreign_key
             }
             
             # Create index for primary key automatically
@@ -716,14 +733,14 @@ class DatabaseEngine:
         schema = self.storage.get_schema(table_name)
         all_rows = self.storage.get_all_rows(table_name)
         
-        # Find rows to delete
+        # Find rows to delete first (before checking foreign keys)
+        rows_to_delete = []
         rows_to_keep = []
-        deleted_count = 0
         
         for row in all_rows:
             if where_clause is None:
                 # Delete all rows (don't add to keep list)
-                deleted_count += 1
+                rows_to_delete.append(row)
             else:
                 # Check if row matches WHERE clause
                 match = True
@@ -758,14 +775,19 @@ class DatabaseEngine:
                         break
                 
                 if match:
-                    deleted_count += 1
+                    rows_to_delete.append(row)
                 else:
                     rows_to_keep.append(row)
+        
+        # Check foreign key constraints and handle CASCADE deletes
+        if rows_to_delete:
+            self._handle_foreign_key_constraints(table_name, rows_to_delete, schema)
         
         # Save remaining rows
         self.storage.update_table_data(table_name, rows_to_keep)
         
         # Rebuild indexes after delete (simpler than tracking deletions)
+        deleted_count = len(rows_to_delete)
         if deleted_count > 0:
             self._rebuild_indexes_after_delete(table_name)
         
@@ -958,6 +980,108 @@ class DatabaseEngine:
             table_name: Name of the table
         """
         self._build_all_indexes(table_name)
+    
+    def _handle_foreign_key_constraints(self, table_name: str, rows_to_delete: List[Dict[str, Any]], 
+                                        schema: Dict[str, Any]) -> None:
+        """
+        Handle foreign key constraints before deletion.
+        - RESTRICT: Prevents deletion if child records exist
+        - CASCADE: Automatically deletes child records
+        
+        Args:
+            table_name: Name of the table being deleted from
+            rows_to_delete: List of rows to be deleted
+            schema: Schema of the table being deleted from
+            
+        Raises:
+            ValueError: If foreign key constraint violation detected (RESTRICT mode)
+        """
+        # Get primary key column of the table being deleted from
+        pk_column = schema.get("primary_key")
+        if not pk_column:
+            # If no primary key, we can't enforce foreign keys reliably
+            return
+        
+        # Get all tables to check for foreign keys
+        all_tables = self.list_tables()
+        
+        # Collect primary key values being deleted
+        pk_values_to_delete = {row[pk_column] for row in rows_to_delete if pk_column in row}
+        
+        if not pk_values_to_delete:
+            return
+        
+        # Check each table for foreign keys pointing to this table
+        for child_table_name in all_tables:
+            if child_table_name == table_name:
+                continue
+            
+            try:
+                child_schema = self.storage.get_schema(child_table_name)
+                child_foreign_keys = child_schema.get("foreign_keys", [])
+                
+                # Find foreign keys that reference the table being deleted from
+                for fk in child_foreign_keys:
+                    if fk.get("references_table") == table_name and fk.get("references_column") == pk_column:
+                        # This child table has a foreign key pointing to the table being deleted
+                        fk_column = fk.get("column")
+                        on_delete = fk.get("on_delete", "RESTRICT")
+                        
+                        if not fk_column:
+                            continue
+                        
+                        # Check if any child records reference the rows being deleted
+                        child_rows = self.storage.get_all_rows(child_table_name)
+                        referencing_rows = [row for row in child_rows if row.get(fk_column) in pk_values_to_delete]
+                        
+                        if referencing_rows:
+                            if on_delete == "CASCADE":
+                                # Automatically delete child records
+                                self._cascade_delete(child_table_name, fk_column, pk_values_to_delete)
+                            else:
+                                # RESTRICT: Prevent deletion
+                                raise ValueError(
+                                    f"Cannot delete or update a parent row: a foreign key constraint fails "
+                                    f"({child_table_name}.{fk_column} -> {table_name}.{pk_column})"
+                                )
+            except ValueError as e:
+                # Re-raise foreign key constraint errors
+                error_msg = str(e)
+                if "Foreign key constraint violation" in error_msg or "Cannot delete" in error_msg:
+                    raise
+                # Table might not exist or other error, skip it
+                continue
+    
+    def _cascade_delete(self, child_table_name: str, fk_column: str, pk_values_to_delete: set) -> None:
+        """
+        Cascade delete: Delete child records that reference the deleted parent records.
+        
+        Args:
+            child_table_name: Name of the child table
+            fk_column: Foreign key column name in child table
+            pk_values_to_delete: Set of primary key values being deleted from parent
+        """
+        all_child_rows = self.storage.get_all_rows(child_table_name)
+        rows_to_keep = [row for row in all_child_rows if row.get(fk_column) not in pk_values_to_delete]
+        
+        # Update child table data
+        self.storage.update_table_data(child_table_name, rows_to_keep)
+        
+        # Rebuild indexes for child table
+        self._rebuild_indexes_after_delete(child_table_name)
+        
+        # Recursively check if this child table has its own children with CASCADE
+        child_schema = self.storage.get_schema(child_table_name)
+        child_pk = child_schema.get("primary_key")
+        if child_pk:
+            deleted_child_pk_values = {
+                row[child_pk] for row in all_child_rows 
+                if row.get(fk_column) in pk_values_to_delete and child_pk in row
+            }
+            if deleted_child_pk_values:
+                self._handle_foreign_key_constraints(child_table_name, 
+                    [row for row in all_child_rows if row.get(child_pk) in deleted_child_pk_values],
+                    child_schema)
     
     def list_tables(self) -> List[str]:
         """

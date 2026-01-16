@@ -6,9 +6,10 @@ A simple relational database management system (RDBMS) implementation with SQL-l
 
 - **Table Creation**: Create tables with column data types (INT, TEXT, BOOL, FLOAT)
 - **CRUD Operations**: Create, Read, Update, Delete operations
-- **Constraints**: Primary key and unique key support
+- **Constraints**: Primary key, unique key, and foreign key support
 - **Indexing**: Basic indexing for fast lookups (automatic on PRIMARY KEY and UNIQUE columns)
 - **Joins**: INNER JOIN operations with multiple table support
+- **Foreign Keys**: Referential integrity with RESTRICT behavior (prevents deletion if child records exist)
 - **REPL**: Interactive command-line interface
 
 ## Project Structure
@@ -21,14 +22,13 @@ pesapal_challenge/
 │   ├── parser.py      # SQL-like command parser
 │   ├── storage.py     # File-based JSON storage
 │   └── repl.py        # REPL interface
-├── web/               # Web app (Phase 7)
-│   ├── app.py
-│   ├── templates/
-│   └── static/
+├── web/               # Web app
+│   ├── app.py         # FastAPI app
+│   └── models.py      # Pydantic models for the API
 ├── data/              # Database files (auto-created)
 ├── main.py            # REPL entry point
-├── requirements.txt
-└── README.md
+├── requirements.txt   # List of dependencies
+└── README.md          # This file
 ```
 
 ## Installation
@@ -104,6 +104,24 @@ INSERT INTO orders VALUES (NULL, 1, 100.50, 'pending');
 
 -- Join users and orders tables
 SELECT * FROM users JOIN orders ON users.id = orders.user_id;
+
+-- Foreign key with RESTRICT (default - prevents deletion if child records exist)
+CREATE TABLE order_items (id INT PRIMARY KEY AUTO_INCREMENT, order_id INT REFERENCES orders(id), product_id INT, quantity INT);
+INSERT INTO order_items VALUES (NULL, 1, 1, 2);
+
+-- Error: Foreign key constraint violation (cannot delete order with child records)
+DELETE FROM orders WHERE id=1;
+
+-- Must delete child records first
+DELETE FROM order_items WHERE order_id=1;
+DELETE FROM orders WHERE id=1;
+
+-- Foreign key with CASCADE (automatically deletes child records)
+CREATE TABLE order_items_cascade (id INT PRIMARY KEY AUTO_INCREMENT, order_id INT REFERENCES orders(id) ON DELETE CASCADE, product_id INT, quantity INT);
+INSERT INTO order_items_cascade VALUES (NULL, 1, 1, 2);
+
+-- Success: Order and order_items_cascade both deleted automatically
+DELETE FROM orders WHERE id=1;
 ```
 
 ### Web App

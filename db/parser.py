@@ -127,12 +127,25 @@ class SQLParser:
             is_auto_increment = 'AUTO_INCREMENT' in col_def.upper() or 'AUTOINCREMENT' in col_def.upper()
             is_unique = 'UNIQUE' in col_def.upper() and not is_primary
             
+            # Check for FOREIGN KEY: REFERENCES table_name(column_name) [ON DELETE CASCADE]
+            foreign_key = None
+            fk_match = re.search(r'REFERENCES\s+(\w+)\s*\((\w+)\)', col_def, re.IGNORECASE)
+            if fk_match:
+                # Check for ON DELETE CASCADE
+                on_delete_cascade = 'ON DELETE CASCADE' in col_def.upper()
+                foreign_key = {
+                    "references_table": fk_match.group(1),
+                    "references_column": fk_match.group(2),
+                    "on_delete": "CASCADE" if on_delete_cascade else "RESTRICT"
+                }
+            
             columns.append({
                 "name": col_name,
                 "type": col_type,
                 "primary_key": is_primary,
                 "unique": is_unique,
-                "auto_increment": is_auto_increment
+                "auto_increment": is_auto_increment,
+                "foreign_key": foreign_key
             })
         
         return {
